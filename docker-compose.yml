@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # The Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: ai-ci-rabbitmq
+    ports:
+      - "5672:5672"   # The port the Go app will talk to
+      - "15672:15672" # The Web UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  # The Database
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai-ci-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: aidebugger
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+# Named volumes so your data doesn't disappear when you restart Docker
+volumes:
+  rabbitmq_data:
+  postgres_data:
