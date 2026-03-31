@@ -16,21 +16,25 @@ ai_client = OpenAI(
     base_url="https://api.groq.com/openai/v1" 
 )
 
-def analyze_log_with_ai(clean_logs):
-    """Sends the cleaned log to the LLM and asks for a fix."""
-    print(" [~] Sending logs to AI for analysis...")
+def analyze_log_with_ai(clean_logs, commit_diff):
+    """Sends the cleaned log and the code diff to the LLM."""
+    print(" [~] Sending logs and code diff to AI for analysis...")
+    
+    user_prompt = f"Here is the failing log:\n\n{clean_logs}\n\n"
+    if commit_diff:
+        user_prompt += f"Here is the code diff for the commit that triggered this run:\n\n{commit_diff}\n\n"
     
     try:
         response = ai_client.chat.completions.create(
-            model="llama-3.1-8b-instant", # Groq's blindingly fast open-source model
+            model="llama-3.1-8b-instant", 
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a Senior DevOps Engineer. Analyze the provided CI/CD failure logs. Identify the exact root cause of the crash, and provide a short, specific, and actionable fix (e.g., a bash command or code change). Keep your explanation under 4 sentences."
+                    "content": "You are a Senior DevOps Engineer. Analyze the provided CI/CD failure logs AND the recent code commit diff. Identify the exact root cause of the crash, paying special attention to the code that was just changed. Provide a short, specific, and actionable fix. Keep your explanation under 4 sentences."
                 },
                 {
                     "role": "user", 
-                    "content": f"Here is the failing log:\n\n{clean_logs}"
+                    "content": user_prompt
                 }
             ],
             max_tokens=500,
@@ -80,6 +84,23 @@ def post_github_comment(repo_full_name, commit_sha, comment_body):
     else:
         print(f" [!] Failed to post comment: {response.status_code} - {response.text}")
 
+def fetch_commit_diff(repo_full_name, commit_sha):
+    """Fetches the raw code diff (patch) for the commit that broke the build."""
+    print(" [~] Fetching code diff for context...")
+    url = f"https://api.github.com/repos/{repo_full_name}/commits/{commit_sha}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        # Return raw Git diff text instead of JSON
+        "Accept": "application/vnd.github.v3.diff", 
+    }
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.text
+    else:
+        print(f" [!] Failed to fetch diff: {response.status_code}")
+        return None
+
 def process_webhook(ch, method, properties, body):
     try:
         payload = json.loads(body)
@@ -100,7 +121,11 @@ def process_webhook(ch, method, properties, body):
                         clean_logs = sanitize_log(raw_logs)
                         log_snippet = "\n".join(clean_logs.splitlines()[-50:])
                         
-                        ai_suggestion = analyze_log_with_ai(log_snippet)
+                        commit_diff = None
+                        if commit_sha:
+                            commit_diff = fetch_commit_diff(repo_name, commit_sha)
+                        
+                        ai_suggestion = analyze_log_with_ai(log_snippet, commit_diff)
                         
                         print("\n==================================================")
                         print("AI DEBUGGER DIAGNOSIS:")
