@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
@@ -12,14 +15,29 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-func main() {
-	// 1. Load Environment Variables (looking up one directory since we run from /receiver)
-	err := godotenv.Load("../.env")
-	if err != nil {
-		log.Println("Warning: No .env file found, falling back to system environment variables")
+// verifySignature checks if the payload was actually sent by GitHub
+func verifySignature(secret []byte, signatureHeader string, body []byte) bool {
+	const signaturePrefix = "sha256="
+	if len(signatureHeader) < len(signaturePrefix) || signatureHeader[:len(signaturePrefix)] != signaturePrefix {
+		return false
 	}
 
-	// 2. Connect to RabbitMQ
+	// Compute our own HMAC using the secret and the body
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(body)
+	expectedMAC := mac.Sum(nil)
+	expectedSignature := signaturePrefix + hex.EncodeToString(expectedMAC)
+
+	// hmac.Equal prevents timing attacks (better than standard string comparison)
+	return hmac.Equal([]byte(signatureHeader), []byte(expectedSignature))
+}
+
+func main() {
+	err := godotenv.Load("../.env")
+	if err != nil {
+		log.Println("Warning: No .env file found")
+	}
+
 	rabbitURL := os.Getenv("RABBITMQ_URL")
 	conn, err := amqp.Dial(rabbitURL)
 	if err != nil {
@@ -33,49 +51,50 @@ func main() {
 	}
 	defer ch.Close()
 
-	// 3. Declare the Queue (Ensures the queue exists before we send to it)
 	q, err := ch.QueueDeclare(
-		"github_webhooks", // name
-		true,              // durable (survives broker restart)
-		false,             // delete when unused
-		false,             // exclusive
-		false,             // no-wait
-		nil,               // arguments
+		"github_webhooks", true, false, false, false, nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to declare a queue: %v", err)
 	}
 
-	// 4. Set up the Web Server
 	router := gin.Default()
 
-	// Health check endpoint (DevOps best practice)
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy", "service": "receiver"})
 	})
 
-	// The actual Webhook Endpoint
 	router.POST("/webhook", func(c *gin.Context) {
-		// Read the incoming JSON from GitHub
+		// 1. Read the body
 		body, err := c.GetRawData()
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot read body"})
 			return
 		}
 
-		// Create a timeout context (Don't let the server hang forever)
+		// 2. Security Check: Validate the GitHub Signature
+		secret := os.Getenv("GITHUB_WEBHOOK_SECRET")
+		signatureHeader := c.GetHeader("X-Hub-Signature-256")
+		
+		if secret != "" {
+			if !verifySignature([]byte(secret), signatureHeader, body) {
+				log.Println("SECURITY ALERT: Invalid webhook signature detected and blocked.")
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+				return
+			}
+		} else {
+			log.Println("Warning: GITHUB_WEBHOOK_SECRET is not set. Running in insecure mode.")
+		}
+
+		// 3. Queue the Event
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Publish the raw JSON directly to RabbitMQ
 		err = ch.PublishWithContext(ctx,
-			"",     // exchange
-			q.Name, // routing key (queue name)
-			false,  // mandatory
-			false,  // immediate
+			"", q.Name, false, false,
 			amqp.Publishing{
 				ContentType:  "application/json",
-				DeliveryMode: amqp.Persistent, // Saves message to disk
+				DeliveryMode: amqp.Persistent,
 				Body:         body,
 			})
 
@@ -85,11 +104,10 @@ func main() {
 			return
 		}
 
-		log.Println("Successfully received and queued webhook event")
+		log.Println("Successfully verified and queued webhook event")
 		c.JSON(http.StatusOK, gin.H{"message": "Event queued successfully"})
 	})
 
-	// 5. Start the Server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
