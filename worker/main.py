@@ -16,6 +16,28 @@ ai_client = OpenAI(
     base_url="https://api.groq.com/openai/v1" 
 )
 
+def comment_already_exists(repo_full_name, commit_sha):
+    """Checks if the AI Debugger has already commented on this commit."""
+    print(" [~] Checking for existing AI comments...")
+    url = f"https://api.github.com/repos/{repo_full_name}/commits/{commit_sha}/comments"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            comments = response.json()
+            for comment in comments:
+                # We look for our unique header signature to prevent duplicates
+                if "## 🤖 AI Debugger Diagnosis" in comment.get("body", ""):
+                    return True
+        return False
+    except Exception as e:
+        print(f" [!] Error checking comments: {e}")
+        return False
+
 def analyze_log_with_ai(clean_logs, commit_diff):
     """Sends the cleaned log and the code diff to the LLM."""
     print(" [~] Sending logs and code diff to AI for analysis...")
@@ -74,7 +96,6 @@ def post_github_comment(repo_full_name, commit_sha, comment_body):
         "Accept": "application/vnd.github.v3+json",
     }
     
-    # Format the comment to look beautiful in Markdown
     formatted_comment = f"## 🤖 AI Debugger Diagnosis\n\n{comment_body}"
     data = {"body": formatted_comment}
     
@@ -90,7 +111,6 @@ def fetch_commit_diff(repo_full_name, commit_sha):
     url = f"https://api.github.com/repos/{repo_full_name}/commits/{commit_sha}"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
-        # Return raw Git diff text instead of JSON
         "Accept": "application/vnd.github.v3.diff", 
     }
     
@@ -104,37 +124,42 @@ def fetch_commit_diff(repo_full_name, commit_sha):
 def process_webhook(ch, method, properties, body):
     try:
         payload = json.loads(body)
-        
         action = payload.get("action")
         workflow_job = payload.get("workflow_job", {})
         conclusion = workflow_job.get("conclusion")
 
         if action == "completed" and conclusion == "failure":
-                    repo_name = payload["repository"]["full_name"]
-                    job_id = workflow_job["id"]                    
-                    commit_sha = workflow_job.get("head_sha")
+            repo_name = payload["repository"]["full_name"]
+            job_id = workflow_job["id"]                    
+            commit_sha = workflow_job.get("head_sha")
+            
+            print(f"\n [!] Detected failure in {repo_name} (Job ID: {job_id})")
+
+            if commit_sha and comment_already_exists(repo_name, commit_sha):
+                print(f" [i] AI has already commented on commit {commit_sha[:7]}. Skipping.")
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+            
+            raw_logs = fetch_workflow_logs(repo_name, job_id)
+            if raw_logs:
+                clean_logs = sanitize_log(raw_logs)
+                log_snippet = "\n".join(clean_logs.splitlines()[-50:])
+                
+                commit_diff = None
+                if commit_sha:
+                    commit_diff = fetch_commit_diff(repo_name, commit_sha)
+                
+                ai_suggestion = analyze_log_with_ai(log_snippet, commit_diff)
+                
+                print("\n==================================================")
+                print("AI DEBUGGER DIAGNOSIS:")
+                print("==================================================")
+                print(ai_suggestion)
+                print("==================================================\n")
+                
+                if commit_sha:
+                    post_github_comment(repo_name, commit_sha, ai_suggestion)
                     
-                    print(f"\n [!] Detected failure in {repo_name} (Job ID: {job_id})")
-                    
-                    raw_logs = fetch_workflow_logs(repo_name, job_id)
-                    if raw_logs:
-                        clean_logs = sanitize_log(raw_logs)
-                        log_snippet = "\n".join(clean_logs.splitlines()[-50:])
-                        
-                        commit_diff = None
-                        if commit_sha:
-                            commit_diff = fetch_commit_diff(repo_name, commit_sha)
-                        
-                        ai_suggestion = analyze_log_with_ai(log_snippet, commit_diff)
-                        
-                        print("\n==================================================")
-                        print("AI DEBUGGER DIAGNOSIS:")
-                        print("==================================================")
-                        print(ai_suggestion)
-                        print("==================================================\n")
-                        
-                        if commit_sha:
-                            post_github_comment(repo_name, commit_sha, ai_suggestion)
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
         print(f"Error: {e}")
