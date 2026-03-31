@@ -8,7 +8,7 @@ on:
 
 jobs:
   test-go-receiver:
-    name: Build Go Receiver
+    name: Lint & Build Go
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -16,16 +16,21 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26' # Matching your Dockerfile!
+        go-version: '1.26'
         
+    - name: Go Lint (Vet)
+      run: |
+        cd receiver
+        # 'go vet' examines Go source code and reports suspect constructs
+        go vet ./...
+
     - name: Verify Go Build
       run: |
         cd receiver
-        go mod download
         go build -v ./...
 
   test-python-worker:
-    name: Build Python Worker
+    name: Lint & Build Python
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -35,17 +40,35 @@ jobs:
       with:
         python-version: '3.10'
         
-    - name: Verify Python Dependencies & Syntax
+    - name: Install Linters
+      run: pip install flake8
+
+    - name: Python Lint (Flake8)
       run: |
         cd worker
-        pip install -r requirements.txt
+        # F401: catches unused imports
+        # F821: catches undefined names (like 'pika' if import is missing!)
+        flake8 main.py --count --select=F401,F821 --show-source --statistics
+
+    - name: Verify Python Syntax
+      run: |
+        cd worker
         python -m py_compile main.py
 
   test-docker-infrastructure:
-    name: Verify Docker Compose
+    name: Lint & Build Docker
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Dockerfile Lint (Hadolint)
+      # Using a pre-built action is the standard "Pro" way
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: receiver/Dockerfile
+
+    - name: Verify Docker Compose Syntax
+      run: docker compose config
+
     - name: Test Docker Build
       run: docker compose build
