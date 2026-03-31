@@ -13,7 +13,7 @@ COPY . .
 RUN go build -o main .
 
 # Stage 2: Create the tiny production image
-FROM alpine:latest
+FROM alpine:3.20
 WORKDIR /app
 
 # Copy only the compiled binary from Stage 1
