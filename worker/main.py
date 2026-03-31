@@ -3,32 +3,53 @@ import os
 import sys
 import json
 from dotenv import load_dotenv
+import requests 
 
-# 1. Load Environment Variables
-# We look one level up for the .env file at the root
 load_dotenv(dotenv_path="../.env")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+def fetch_workflow_logs(repo_full_name, job_id):
+    """Fetches raw logs from GitHub API for a specific job."""
+    url = f"https://api.github.com/repos/{repo_full_name}/actions/jobs/{job_id}/logs"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.text
+    else:
+        print(f"Failed to fetch logs: {response.status_code}")
+        return None
 
 def process_webhook(ch, method, properties, body):
-    """
-    This function triggers every time a message is received from RabbitMQ.
-    """
     try:
-        # Decode the byte string from RabbitMQ into JSON
-        data = json.loads(body)
-        print(f" [x] Received Webhook Data: {data}")
+        payload = json.loads(body)
         
-        # TODO: This is where we will add:
-        # 1. GitHub API call to get logs
-        # 2. Regex parsing to find the error
-        # 3. LLM call to suggest a fix
-        
-        # Acknowledge the message (tells RabbitMQ it's safe to delete it)
+        # We only care about completed jobs that failed
+        action = payload.get("action")
+        workflow_job = payload.get("workflow_job", {})
+        conclusion = workflow_job.get("conclusion")
+
+        if action == "completed" and conclusion == "failure":
+            repo_name = payload["repository"]["full_name"]
+            job_id = workflow_job["id"]
+            
+            print(f" [!] Detected failure in {repo_name} (Job ID: {job_id}). Fetching logs...")
+            
+            logs = fetch_workflow_logs(repo_name, job_id)
+            if logs:
+                # For now, let's just print the last 20 lines of the log
+                log_lines = logs.splitlines()[-20:]
+                print("--- LOG SNIPPET ---")
+                print("\n".join(log_lines))
+                print("--- END LOG ---")
+                
+                # NEXT STEP: This 'logs' string goes to the AI
+            
         ch.basic_ack(delivery_tag=method.delivery_tag)
-        print(" [✓] Done processing")
-        
     except Exception as e:
-        print(f" [!] Error processing message: {e}")
-        # If it fails, we don't acknowledge, so it stays in the queue
+        print(f"Error: {e}")
 
 def main():
     # 2. Connect to RabbitMQ
