@@ -5,14 +5,12 @@ import json
 import requests 
 import re 
 from dotenv import load_dotenv
-from openai import OpenAI  # <--- NEW: Import the AI library
+from openai import OpenAI  
 
-# Load environment variables
 load_dotenv(dotenv_path="../.env")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
-# NEW: Initialize the AI Client. 
-# We use the OpenAI library, but point it at Groq's free servers!
+# We use the OpenAI library, but point it at Groq's free servers
 ai_client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1" 
@@ -36,7 +34,7 @@ def analyze_log_with_ai(clean_logs):
                 }
             ],
             max_tokens=500,
-            temperature=0.2 # Keep it analytical and factual, not creative
+            temperature=0.2
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -63,6 +61,25 @@ def sanitize_log(raw_log):
             cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
 
+def post_github_comment(repo_full_name, commit_sha, comment_body):
+    """Posts the AI diagnosis as a comment on the failed commit."""
+    print(" [~] Pushing diagnosis to GitHub...")
+    url = f"https://api.github.com/repos/{repo_full_name}/commits/{commit_sha}/comments"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    
+    # Format the comment to look beautiful in Markdown
+    formatted_comment = f"## 🤖 AI Debugger Diagnosis\n\n{comment_body}"
+    data = {"body": formatted_comment}
+    
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 201:
+        print(" [✓] Successfully posted AI diagnosis to GitHub!")
+    else:
+        print(f" [!] Failed to post comment: {response.status_code} - {response.text}")
+
 def process_webhook(ch, method, properties, body):
     try:
         payload = json.loads(body)
@@ -72,27 +89,27 @@ def process_webhook(ch, method, properties, body):
         conclusion = workflow_job.get("conclusion")
 
         if action == "completed" and conclusion == "failure":
-            repo_name = payload["repository"]["full_name"]
-            job_id = workflow_job["id"]
-            
-            print(f"\n [!] Detected failure in {repo_name} (Job ID: {job_id})")
-            
-            raw_logs = fetch_workflow_logs(repo_name, job_id)
-            if raw_logs:
-                clean_logs = sanitize_log(raw_logs)
-                
-                # We only send the last 50 lines to the AI to save tokens and context window
-                log_snippet = "\n".join(clean_logs.splitlines()[-50:])
-                
-                # --- THE MAGIC HAPPENS HERE ---
-                ai_suggestion = analyze_log_with_ai(log_snippet)
-                
-                print("\n==================================================")
-                print("AI DEBUGGER DIAGNOSIS:")
-                print("==================================================")
-                print(ai_suggestion)
-                print("==================================================\n")
-            
+                    repo_name = payload["repository"]["full_name"]
+                    job_id = workflow_job["id"]                    
+                    commit_sha = workflow_job.get("head_sha")
+                    
+                    print(f"\n [!] Detected failure in {repo_name} (Job ID: {job_id})")
+                    
+                    raw_logs = fetch_workflow_logs(repo_name, job_id)
+                    if raw_logs:
+                        clean_logs = sanitize_log(raw_logs)
+                        log_snippet = "\n".join(clean_logs.splitlines()[-50:])
+                        
+                        ai_suggestion = analyze_log_with_ai(log_snippet)
+                        
+                        print("\n==================================================")
+                        print("AI DEBUGGER DIAGNOSIS:")
+                        print("==================================================")
+                        print(ai_suggestion)
+                        print("==================================================\n")
+                        
+                        if commit_sha:
+                            post_github_comment(repo_name, commit_sha, ai_suggestion)
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
         print(f"Error: {e}")
