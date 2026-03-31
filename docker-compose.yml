@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # The Message Broker
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: ai-ci-rabbitmq
@@ -14,8 +13,13 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     restart: unless-stopped
+    # The healthcheck tells the Go/Python apps not to start until RabbitMQ is actually ready
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # The Database
   postgres:
     image: pgvector/pgvector:pg16
     container_name: ai-ci-postgres
@@ -29,7 +33,35 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
-# Named volumes so your data doesn't disappear when you restart Docker
+  receiver:
+    build: 
+      context: ./receiver
+    container_name: ai_debugger_receiver
+    ports:
+      - "8080:8080"
+    environment:
+      # We tell Go to talk to 'rabbitmq' instead of 'localhost'
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - PORT=8080
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build: 
+      context: ./worker
+    container_name: ai_debugger_worker
+    environment:
+      # We tell Python to talk to 'rabbitmq' instead of 'localhost'
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+# Persistent Storage
 volumes:
   rabbitmq_data:
   postgres_data:
