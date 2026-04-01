@@ -2,7 +2,7 @@ name: System Integration CI
 
 on:
   push:
-    branches: [ "main", "test-*" ]
+    branches: [ "main", "test-*", "dev" ]
   pull_request:
     branches: [ "main" ]
 
