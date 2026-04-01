@@ -23,16 +23,16 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: ai-ci-postgres
-    ports:
-      - "5432:5432"
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: secretpassword
-      POSTGRES_DB: aidebugger
+      # Use ${VAR} to pull from your .env file
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
-    restart: unless-stopped
+    ports:
+      - "5432:5432"
 
   receiver:
     build: 
@@ -50,17 +50,18 @@ services:
         condition: service_healthy
 
   worker:
-    build: 
-      context: ./worker
+    build: ./worker
     container_name: ai_debugger_worker
     environment:
-      # We tell Python to talk to 'rabbitmq' instead of 'localhost'
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - DATABASE_URL=${DATABASE_URL} # Pulls the full string from .env
     depends_on:
       rabbitmq:
         condition: service_healthy
+      postgres:
+        condition: service_started
 
 # Persistent Storage
 volumes:
