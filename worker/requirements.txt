@@ -20,3 +20,6 @@ tqdm==4.67.3
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
+sentence-transformers==3.0.1
+psycopg2-binary==2.9.9
+pgvector==0.3.1
