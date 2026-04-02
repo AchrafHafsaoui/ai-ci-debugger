@@ -238,7 +238,6 @@ def process_webhook(ch, method, properties, body):
                 if commit_sha:
                     commit_diff = fetch_commit_diff(repo_name, commit_sha)
                     
-                    # --- NEW: PROJECT CONTEXT EXTRACTION ---
                     # Find all files changed in the diff
                     changed_files = re.findall(r'diff --git a/(.*?) b/', commit_diff)
                     
@@ -253,7 +252,9 @@ def process_webhook(ch, method, properties, body):
                     for file_path in changed_files[:2]:
                         content = fetch_full_file(repo_name, file_path, commit_sha)
                         if content:
-                            project_context += f"--- FULL FILE CONTENT: {file_path} ---\n{content}\n\n"
+                            # Truncate to first 100 lines to save tokens
+                            truncated_content = "\n".join(content.splitlines()[:100])
+                            project_context += f"--- FULL FILE (TOP 100 LINES): {file_path} ---\n{truncated_content}\n\n"
 
                 # --- RAG PIPELINE ---
                 historical_context = find_similar_failures(log_snippet, repo_name)
