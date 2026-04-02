@@ -101,16 +101,20 @@ def comment_already_exists(repo_full_name, commit_sha):
         print(f" [!] Error checking comments: {e}")
         return False
 
-def analyze_log_with_ai(clean_logs, commit_diff, historical_context=None):
-    """Sends the cleaned log, diff, AND historical memory to the LLM."""
-    print(" [~] Sending data to AI for analysis...")
+def analyze_log_with_ai(clean_logs, commit_diff, historical_context=None, project_context=""):
+    """Sends the cleaned log, diff, historical memory, and full project context to the LLM."""
+    print(" [~] Sending deep context to AI for analysis...")
     
     user_prompt = f"Here is the failing log:\n\n{clean_logs}\n\n"
+    
     if commit_diff:
-        user_prompt += f"Here is the code diff for the commit that triggered this run:\n\n{commit_diff}\n\n"
+        user_prompt += f"--- GIT DIFF ---\n{commit_diff}\n\n"
+        
+    if project_context:
+        user_prompt += f"--- PROJECT CONTEXT (Full Files & Manifests) ---\n{project_context}\n\n"
         
     if historical_context:
-        user_prompt += f"--- HISTORICAL CONTEXT ---\nA very similar error occurred in the past:\nPast Error:\n{historical_context['error']}\n\nHow we fixed it last time:\n{historical_context['diagnosis']}\n\nPlease use this historical context to inform your current diagnosis, especially if this seems like a recurring issue or flaky test.\n"
+        user_prompt += f"--- HISTORICAL CONTEXT ---\nA very similar error occurred in the past:\nPast Error:\n{historical_context['error']}\n\nHow we fixed it last time:\n{historical_context['diagnosis']}\n\nPlease use this historical context to inform your current diagnosis.\n"
     
     try:
         response = ai_client.chat.completions.create(
@@ -118,7 +122,13 @@ def analyze_log_with_ai(clean_logs, commit_diff, historical_context=None):
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a Senior DevOps Engineer. Analyze the provided CI/CD failure logs AND the recent code commit diff. Identify the exact root cause of the crash. If historical context is provided, use it to determine if this is a regression or a known issue. Provide a short, specific, and actionable fix. Keep your explanation under 4 sentences."
+                    "content": (
+                        "You are a Senior DevOps Engineer. Analyze the provided CI/CD logs, the code diff, "
+                        "and the full file contents (Project Context). Use the manifests (like go.mod or requirements.txt) "
+                        "to check for dependency issues. Use the full file contents to understand logic outside the diff. "
+                        "Identify the root cause and provide a short, specific, and actionable fix. "
+                        "Keep your explanation under 4 sentences."
+                    )
                 },
                 {
                     "role": "user", 
@@ -187,6 +197,17 @@ def fetch_commit_diff(repo_full_name, commit_sha):
         print(f" [!] Failed to fetch diff: {response.status_code}")
         return None
 
+def fetch_full_file(repo_full_name, file_path, commit_sha):
+    """Fetches the complete content of a specific file at a specific commit."""
+    print(f" [~] Fetching full context for {file_path}...")
+    url = f"https://api.github.com/repos/{repo_full_name}/contents/{file_path}?ref={commit_sha}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3.raw", # Get raw text
+    }
+    response = requests.get(url, headers=headers)
+    return response.text if response.status_code == 200 else ""
+
 def process_webhook(ch, method, properties, body):
     try:
         payload = json.loads(body)
@@ -212,13 +233,32 @@ def process_webhook(ch, method, properties, body):
                 log_snippet = "\n".join(clean_logs.splitlines()[-50:])
                 
                 commit_diff = None
+                project_context = ""
+                
                 if commit_sha:
                     commit_diff = fetch_commit_diff(repo_name, commit_sha)
+                    
+                    # --- NEW: PROJECT CONTEXT EXTRACTION ---
+                    # Find all files changed in the diff
+                    changed_files = re.findall(r'diff --git a/(.*?) b/', commit_diff)
+                    
+                    # Fetch dependency manifests for extra context
+                    manifests = ["go.mod", "requirements.txt", "package.json", "receiver/Dockerfile"]
+                    for manifest in manifests:
+                        content = fetch_full_file(repo_name, manifest, commit_sha)
+                        if content:
+                            project_context += f"--- MANIFEST: {manifest} ---\n{content}\n\n"
+
+                    # Fetch full content for the first 2 changed files to stay within token limits
+                    for file_path in changed_files[:2]:
+                        content = fetch_full_file(repo_name, file_path, commit_sha)
+                        if content:
+                            project_context += f"--- FULL FILE CONTENT: {file_path} ---\n{content}\n\n"
 
                 # --- RAG PIPELINE ---
                 historical_context = find_similar_failures(log_snippet, repo_name)
                 
-                ai_suggestion = analyze_log_with_ai(log_snippet, commit_diff, historical_context)
+                ai_suggestion = analyze_log_with_ai(log_snippet, commit_diff, historical_context, project_context)
                 
                 print("\n==================================================")
                 print("AI DEBUGGER DIAGNOSIS:")
