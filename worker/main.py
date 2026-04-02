@@ -248,13 +248,27 @@ def process_webhook(ch, method, properties, body):
                         if content:
                             project_context += f"--- MANIFEST: {manifest} ---\n{content}\n\n"
 
-                    # Fetch full content for the first 2 changed files to stay within token limits
-                    for file_path in changed_files[:2]:
-                        content = fetch_full_file(repo_name, file_path, commit_sha)
+                    culprit_file = None
+                    for file_path in changed_files:
+                        # We extract just the filename (e.g., 'main.py' from 'worker/main.py')
+                        # because stack traces often don't print the full repository path.
+                        file_name = file_path.split('/')[-1]
+                        
+                        if file_name in clean_logs:
+                            print(f" [!] Found {file_name} in the error logs.")
+                            culprit_file = file_path
+                            break
+                    
+                    if not culprit_file and changed_files:
+                        print(" [i] No direct log match found. Falling back to the primary changed file.")
+
+                    # Fetch the full content of ONLY our exact target
+                    if culprit_file:
+                        content = fetch_full_file(repo_name, culprit_file, commit_sha)
                         if content:
-                            # Truncate to first 100 lines to save tokens
+                            # Truncate to first 100 lines to strictly protect the token budget
                             truncated_content = "\n".join(content.splitlines()[:100])
-                            project_context += f"--- FULL FILE (TOP 100 LINES): {file_path} ---\n{truncated_content}\n\n"
+                            project_context += f"--- TARGET FILE (TOP 100 LINES): {culprit_file} ---\n{truncated_content}\n\n"
 
                 # --- RAG PIPELINE ---
                 historical_context = find_similar_failures(log_snippet, repo_name)
