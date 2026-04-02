@@ -7,32 +7,31 @@
 [![Python Version](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=flat&logo=docker)](https://www.docker.com/)
 
-**AI CI Debugger** An event-driven, microservices-based AI agent designed to monitor GitHub Actions, diagnose CI/CD failures using LLMs (Llama 3.1 via Groq), and post actionable fixes directly back to GitHub commits.
+**AI CI Debugger** is an event-driven, microservices-based AI agent designed to monitor GitHub Actions, diagnose CI/CD failures using LLMs (Llama 3.1 via Groq), and post actionable fixes directly back to GitHub commits.
 
 ---
 
 ## Key Features
 
-The system is built as a distributed architecture to ensure scalability and reliability:
-
 - **Instant Analysis**: Automated diagnosis within seconds of job failure.
-- **Deep Context**: Analysis of the **code diff** alongside the **failing logs** to understand *why* the change broke the build.
-- **Actionable Fixes**: Provides specific code suggestions directly in the GitHub commit comments.
-- **Webhook Security**: Implements HMAC SHA-256 signature verification for all incoming GitHub webhooks and implements idempotency.
-- **Fully Containerized:** Environment-agnostic setup. If you have Docker, you can run the entire infrastructure in seconds.
-- **Blindingly Fast:** Powered by Groq's Llama-3.1-8b-instant model for sub-second diagnosis generation.
+- **Deep Contextual Awareness**: Analyzes **code diffs**, **full manifests** (`go.mod`, `requirements.txt`, etc.), and the **culprit files** (through failing logs) to understand the root cause.
+- **Actionable Fixes**: Provides specific code suggestions directly in GitHub commit comments.
+- **Long-term Memory (RAG)**: Utilizes a vector database to remember past failures and their solutions, informing future diagnoses with historical context.
+- **Webhook Security**: Implements HMAC SHA-256 signature verification for all incoming GitHub webhooks.
+- **Idempotency**: Prevents duplicate comments on the same commit failure and unnecessary API requests.
+- **Fully Containerized**: Environment-agnostic setup using Docker Compose.
 
 ---
 
 ## High-Level Architecture
 
-The system is built as a distributed architecture to ensure scalability and reliability:
+The system is built as a distributed architecture for scalability and reliability:
 
-1.  **Ingress (Go/Gin)**: A high-performance receiver that validates GitHub Webhook signatures and queues events.
-2.  **Message Broker (RabbitMQ)**: Ensures reliability and decoupling between the receiver and the AI engine.
-3.  **Analysis Engine (Python/Pika)**: The "Brain" of the operation. It fetches logs, retrieves commit diffs, and consults the LLM.
-4.  **Vector Store (PostgreSQL/pgvector)**: (In development) Enables Retrieval-Augmented Generation (RAG) to reference historical failures and documentation.
-5.  **Docker Compose:** Orchestrates the entire stack into a single-command deployment.
+1.  **Ingress (Go/Gin)**: A high-performance receiver that validates GitHub Webhook signatures and queues events into RabbitMQ.
+2.  **Message Broker (RabbitMQ)**: Decouples the receiver from the analysis engine, ensuring reliable event delivery.
+3.  **Analysis Engine (Python/Pika)**: The "Brain" of the operation. It fetches logs, diffs, and files, consults the LLM, and manages the RAG pipeline.
+4.  **Vector Store (PostgreSQL/pgvector)**: Stores embeddings of historical failures to provide relevant context for new issues.
+5.  **Docker Compose**: Orchestrates the entire stack for single-command deployment.
 
 ---
 
@@ -53,11 +52,15 @@ The system is built as a distributed architecture to ensure scalability and reli
 2.  **Configure Environment:**
     Create a `.env` file based on `.env.example`:
     ```env
-    RABBITMQ_URL=your_rabbitmq_url
-    PORT=your_api_port
-    GITHUB_TOKEN=your_github_pat
-    GITHUB_WEBHOOK_SECRET=your_webhook_secret
-    GROQ_API_KEY=your_groq_key
+    RABBITMQ_URL=
+    PORT=
+    GITHUB_TOKEN=
+    GITHUB_WEBHOOK_SECRET=
+    GROQ_API_KEY=
+    POSTGRES_USER=
+    POSTGRES_PASSWORD=
+    POSTGRES_DB=
+    DATABASE_URL=
     ```
 
 3.  **Launch Infrastructure:**
@@ -74,13 +77,12 @@ The system is built as a distributed architecture to ensure scalability and reli
 
 | Component | Technology |
 | :--- | :--- |
-| **Backend** | Go (Gin) |
-| **Worker** | Python |
+| **Ingress Service** | Go (Gin) |
+| **Worker Service** | Python (Pika, Sentence-Transformers) |
 | **Messaging** | RabbitMQ |
-| **Database** | PostgreSQL + pgvector |
+| **Vector Database** | PostgreSQL + pgvector |
+| **AI Model** | Llama-3.1-8b-instant (via Groq) |
 | **Infrastructure** | Docker, Docker Compose |
-| **AI Model** | Llama-3.1 (via Groq) |
-| **Tunneling** | ngrok |
 
 ---
 
