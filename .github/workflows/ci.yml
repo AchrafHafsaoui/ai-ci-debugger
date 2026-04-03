@@ -21,7 +21,6 @@ jobs:
     - name: Go Lint (Vet)
       run: |
         cd receiver
-        # 'go vet' examines Go source code and reports suspect constructs
         go vet ./...
 
     - name: Verify Go Build
@@ -30,7 +29,7 @@ jobs:
         go build -v ./...
 
   test-python-worker:
-    name: Lint & Build Python
+    name: Lint & Build Python Worker
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -46,8 +45,6 @@ jobs:
     - name: Python Lint (Flake8)
       run: |
         cd worker
-        # F401: catches unused imports
-        # F821: catches undefined names (like 'pika' if import is missing!)
         flake8 main.py --count --select=F401,F821 --show-source --statistics
 
     - name: Verify Python Syntax
@@ -55,17 +52,45 @@ jobs:
         cd worker
         python -m py_compile main.py
 
+  test-streamlit-dashboard:
+    name: Lint & Build Dashboard
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install Linters
+      run: pip install flake8
+
+    - name: Dashboard Lint (Flake8)
+      run: |
+        cd dashboard
+        flake8 app.py --count --select=F401,F821 --show-source --statistics
+
+    - name: Verify Dashboard Syntax
+      run: |
+        cd dashboard
+        python -m py_compile app.py
+
   test-docker-infrastructure:
     name: Lint & Build Docker
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
 
-    - name: Dockerfile Lint (Hadolint)
-      # Using a pre-built action is the standard "Pro" way
+    - name: Lint Receiver Dockerfile
       uses: hadolint/hadolint-action@v3.1.0
       with:
         dockerfile: receiver/Dockerfile
+
+    - name: Lint Dashboard Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: dashboard/Dockerfile
 
     - name: Verify Docker Compose Syntax
       run: docker compose config
