@@ -1,38 +1,36 @@
 import streamlit as st
-import psycopg2
 import pandas as pd
 import os
+from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
 # Page Config
 st.set_page_config(page_title="AI Debugger Command Center", page_icon="🤖", layout="wide")
 load_dotenv(dotenv_path="../.env")
 
-DB_URL = os.getenv("DATABASE_URL")
+# SQLAlchemy expects 'postgresql://' not 'postgres://'
+DB_URL = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://")
 
 @st.cache_resource
-def init_connection():
-    """Establish a cached connection to PostgreSQL."""
-    return psycopg2.connect(DB_URL)
+def get_engine():
+    """Establish a cached SQLAlchemy engine."""
+    return create_engine(DB_URL)
 
-conn = init_connection()
+engine = get_engine()
 
 @st.cache_data(ttl=60) 
 def fetch_basic_stats():
     """Fetch high-level metrics."""
-    query = """
-        SELECT 
-            COUNT(*) as total_failures,
-            COUNT(DISTINCT repo_name) as unique_repos
-        FROM failure_history;
-    """
-    return pd.read_sql(query, conn)
+    query = "SELECT COUNT(*) as total_failures, COUNT(DISTINCT repo_name) as unique_repos FROM failure_history;"
+    with engine.connect() as conn:
+        return pd.read_sql(text(query), conn)
 
 @st.cache_data(ttl=600)
 def fetch_all_repos():
     """Fetch a unique list of repositories for the filter dropdown."""
     query = "SELECT DISTINCT repo_name FROM failure_history ORDER BY repo_name ASC;"
-    df = pd.read_sql(query, conn)
+    with engine.connect() as conn:
+        df = pd.read_sql(text(query), conn)
     return ["All"] + df['repo_name'].tolist()
 
 @st.cache_data(ttl=60)
@@ -43,22 +41,20 @@ def fetch_recent_failures(search_query="", repo_filter="All"):
         FROM failure_history 
         WHERE 1=1
     """
-    params = []
+    params = {}
     
     if repo_filter != "All":
-        query += " AND repo_name = %s"
-        params.append(repo_filter)
+        query += " AND repo_name = :repo_name"
+        params["repo_name"] = repo_filter
         
     if search_query:
-        # Search in both snippet and diagnosis
-        query += " AND (error_snippet ILIKE %s OR ai_diagnosis ILIKE %s)"
-        search_pattern = f"%{search_query}%"
-        params.append(search_pattern)
-        params.append(search_pattern)
+        query += " AND (error_snippet ILIKE :search OR ai_diagnosis ILIKE :search)"
+        params["search"] = f"%{search_query}%"
         
     query += " ORDER BY created_at DESC LIMIT 100;"
     
-    return pd.read_sql(query, conn, params=params)
+    with engine.connect() as conn:
+        return pd.read_sql(text(query), conn, params=params)
 
 # --- UI LAYOUT ---
 st.title("🤖 AI Debugger Command Center")
@@ -105,7 +101,7 @@ if not failures_df.empty:
         formatted_date = row['created_at'].strftime("%Y-%m-%d %H:%M")
         
         with st.expander(f"🛑 [{formatted_date}] {row['repo_name']} (Commit: {row['commit_sha'][:7]})"):
-            st.caption(f"🕒 **Full Detection Time:** {row['created_at'].strftime('%Y-%m-%d %H:%M:%S')} | **Commit:** `{row['commit_sha']}`")
+            st.caption(f"**More Info:** {row['created_at'].strftime('%Y-%m-%d %H:%M:%S')} | **Commit:** `{row['commit_sha']}`")
             
             st.markdown("**Error Snippet:**")
             st.code(row['error_snippet'], language="bash")
