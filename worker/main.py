@@ -260,7 +260,7 @@ def process_webhook(ch, method, properties, body):
                             break
                     
                     if not culprit_file and changed_files:
-                        print(" [i] No direct log match found. Falling back to the primary changed file.")
+                        print(" [i] No direct log match found.")
 
                     # Fetch the full content of ONLY our exact target
                     if culprit_file:
