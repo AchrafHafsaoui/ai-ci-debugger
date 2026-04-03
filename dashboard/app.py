@@ -28,24 +28,46 @@ def fetch_basic_stats():
     """
     return pd.read_sql(query, conn)
 
+@st.cache_data(ttl=600)
+def fetch_all_repos():
+    """Fetch a unique list of repositories for the filter dropdown."""
+    query = "SELECT DISTINCT repo_name FROM failure_history ORDER BY repo_name ASC;"
+    df = pd.read_sql(query, conn)
+    return ["All"] + df['repo_name'].tolist()
+
 @st.cache_data(ttl=60)
-def fetch_recent_failures():
-    """Fetch the latest 100 diagnoses."""
+def fetch_recent_failures(search_query="", repo_filter="All"):
+    """Fetch the latest diagnoses with optional filtering."""
     query = """
-        SELECT repo_name, commit_sha, error_snippet, ai_diagnosis 
+        SELECT repo_name, commit_sha, error_snippet, ai_diagnosis, created_at 
         FROM failure_history 
-        LIMIT 100;
+        WHERE 1=1
     """
-    return pd.read_sql(query, conn)
+    params = []
+    
+    if repo_filter != "All":
+        query += " AND repo_name = %s"
+        params.append(repo_filter)
+        
+    if search_query:
+        # Search in both snippet and diagnosis
+        query += " AND (error_snippet ILIKE %s OR ai_diagnosis ILIKE %s)"
+        search_pattern = f"%{search_query}%"
+        params.append(search_pattern)
+        params.append(search_pattern)
+        
+    query += " ORDER BY created_at DESC LIMIT 100;"
+    
+    return pd.read_sql(query, conn, params=params)
 
 # --- UI LAYOUT ---
 st.title("🤖 AI Debugger Command Center")
 st.markdown("Monitor continuous integration failures and AI RAG memory.")
 
-# Fetch Data
+# Fetch Metadata
 try:
     stats_df = fetch_basic_stats()
-    failures_df = fetch_recent_failures()
+    repo_list = fetch_all_repos()
 except Exception as e:
     st.error(f"Database connection failed: {e}")
     st.stop()
@@ -61,16 +83,33 @@ with col3:
 
 st.divider()
 
+# --- FILTERING SECTION ---
+st.subheader("🔍 Search & Filter")
+f_col1, f_col2 = st.columns([1, 2])
+
+with f_col1:
+    selected_repo = st.selectbox("Filter by Repository", repo_list)
+
+with f_col2:
+    search_text = st.text_input("Search Logs or AI Diagnosis", placeholder="e.g. 'psycopg2', 'connection timeout', 'main.py'...")
+
+# Fetch Filtered Data
+failures_df = fetch_recent_failures(search_text, selected_repo)
+
 # --- VECTOR MEMORY BANK ---
-st.subheader("🗄️ Vector Memory Bank (Recent Diagnoses)")
+st.subheader(f"🗄️ Vector Memory Bank ({len(failures_df)} results)")
 
 if not failures_df.empty:
-    # Create a beautiful, expandable list of failures
     for index, row in failures_df.iterrows():
-        with st.expander(f"🛑 {row['repo_name']} (Commit: {row['commit_sha'][:7]})"):
+        # Format the date for the label
+        formatted_date = row['created_at'].strftime("%Y-%m-%d %H:%M")
+        
+        with st.expander(f"🛑 [{formatted_date}] {row['repo_name']} (Commit: {row['commit_sha'][:7]})"):
+            st.caption(f"🕒 **Full Detection Time:** {row['created_at'].strftime('%Y-%m-%d %H:%M:%S')} | **Commit:** `{row['commit_sha']}`")
+            
             st.markdown("**Error Snippet:**")
             st.code(row['error_snippet'], language="bash")
             st.markdown("**AI Diagnosis:**")
             st.info(row['ai_diagnosis'])
 else:
-    st.info("No failures recorded yet. Break some code!")
+    st.info("No matching failures found. Try adjusting your search filters.")
