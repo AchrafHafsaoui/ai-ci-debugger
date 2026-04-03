@@ -29,7 +29,7 @@ jobs:
         go build -v ./...
 
   test-python-worker:
-    name: Lint & Build Python Worker
+    name: Lint & Type-Check Worker
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -39,21 +39,24 @@ jobs:
       with:
         python-version: '3.10'
         
-    - name: Install Linters
-      run: pip install flake8
+    - name: Install Analysis Tools
+      # We install 'types-requests' and 'types-psycopg2' so Mypy understands our libraries
+      run: pip install flake8 mypy types-requests types-psycopg2
 
     - name: Python Lint (Flake8)
       run: |
         cd worker
-        flake8 main.py --count --select=F401,F821 --show-source --statistics
+        # E9,F63,F7,F82 catch syntax and obvious logic errors
+        flake8 main.py --count --select=E9,F63,F7,F82 --show-source --statistics
 
-    - name: Verify Python Syntax
+    - name: Static Type Check (Mypy)
       run: |
         cd worker
-        python -m py_compile main.py
+        # This is what will catch the "0.8" string comparison!
+        mypy main.py --ignore-missing-imports
 
   test-streamlit-dashboard:
-    name: Lint & Build Dashboard
+    name: Lint & Type-Check Dashboard
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -63,18 +66,18 @@ jobs:
       with:
         python-version: '3.11'
         
-    - name: Install Linters
-      run: pip install flake8
+    - name: Install Analysis Tools
+      run: pip install flake8 mypy types-psycopg2
 
     - name: Dashboard Lint (Flake8)
       run: |
         cd dashboard
-        flake8 app.py --count --select=F401,F821 --show-source --statistics
+        flake8 app.py --count --select=E9,F63,F7,F82 --show-source --statistics
 
-    - name: Verify Dashboard Syntax
+    - name: Static Type Check (Mypy)
       run: |
         cd dashboard
-        python -m py_compile app.py
+        mypy app.py --ignore-missing-imports
 
   test-docker-infrastructure:
     name: Lint & Build Docker
